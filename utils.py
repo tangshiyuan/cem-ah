@@ -338,16 +338,12 @@ def sample_episodes_netCEM2_reacher(env, model, max_steps, sparse_reward, screen
     episode_steps = []
 
     obs = env.reset(screenshot)
-    # sm = nn.Softmax(dim=1)
     for step in range(max_steps):
         obs_v = torch.FloatTensor([obs.flatten()])
         obs_v = obs_v.to(device)
 
         model_out = model(obs_v)
         model_out[torch.isnan(model_out)] = 0
-        # act_probs_v = sm(model_out)
-        # act_probs = act_probs_v.cpu().data.numpy()[0]
-        # action = act_probs_v.cpu().data.numpy().flatten()
         act_probs_v = model_out
         action = act_probs_v.cpu().data.numpy().flatten()
 
@@ -754,31 +750,26 @@ def iterate_model_batchesWB_msCEM2(env, model, theta, agent_start_list, batch_si
     return WeightEp(weight=theta, ave_reward=reward_mean, ave_steps=step_counts_mean, episodes=batch)
 
 
-# def iterate_model_batchesWB_msCEM2_reacher(env, model, theta, agent_start_list, max_steps, batch_size, sparse_reward, screenshot, use_cuda, device):
-#     batch = []
-#     # set the current model's generated weights
-#     # model.set_theta(theta)
-#     theta_tensor = torch.FloatTensor(theta.flatten())
-#     loadWeight_dict = getLoadWeightDict(model.state_dict(), theta_tensor)
-#     model.load_state_dict(loadWeight_dict)
-#
-#     # sample episodes
-#     for agent_start in agent_start_list:
-#         # start_pos = agent_start[0]  # col, row
-#         # start_dir = agent_start[1]
-#         # env.set_initial_pos_dir(start_pos, start_dir)
-#         ep_batch = []
-#         for episodes in range(batch_size):
-#             ep_batch.append(sample_episodes_netCEM2_reacher(env, model, max_steps, sparse_reward, screenshot, use_cuda, device))
-#         batch.extend(ep_batch)
-#         # print(len(batch))
-#     # also calculate the average reward of this model batch
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_mean = float(np.mean(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     return WeightEp(weight=theta, ave_reward=reward_mean, ave_steps=step_counts_mean, episodes=batch)
+def iterate_model_batchesWB_msCEM2_reacher(env, model, theta, agent_start_list, max_steps, batch_size, sparse_reward, screenshot, use_cuda, device):
+    batch = []
+    # set the current model's generated weights
+    theta_tensor = torch.FloatTensor(theta.flatten())
+    loadWeight_dict = getLoadWeightDict(model.state_dict(), theta_tensor)
+    model.load_state_dict(loadWeight_dict)
+
+    # sample episodes
+    for agent_start in agent_start_list:
+        ep_batch = []
+        for episodes in range(batch_size):
+            ep_batch.append(sample_episodes_netCEM2_reacher(env, model, max_steps, sparse_reward, screenshot, use_cuda, device))
+        batch.extend(ep_batch)
+    # also calculate the average reward of this model batch
+    rewards = list(map(lambda s: s.reward, batch))
+    reward_mean = float(np.mean(rewards))
+    step_counts = list(map(lambda s: len(s.steps), batch))
+    step_counts_mean = float(np.mean(step_counts))
+
+    return WeightEp(weight=theta, ave_reward=reward_mean, ave_steps=step_counts_mean, episodes=batch)
 
 
 # def filter_batch(batch, percentile):
