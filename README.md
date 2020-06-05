@@ -4,10 +4,12 @@ This work is owned by the authors of the paper submitted to NeurIPS 2020 (under 
 
 ## Usage
 
+Run the following for maze experiment.
 ```Train and Evaluation (maze)
 python CEM_AH_discreteAction.py --lr 1e-4 --layer 2 --batch_size 100
 ```
 
+Run the following for reacher experiment.
 ```Train and Evaluation (reacher)
 python CEM_AH_continuousAction.py --lr 1e-4 --layer 2 --batch_size 100
 ```
@@ -18,7 +20,7 @@ The train and evaluation are done within the same execution. Evaluation is done 
 It signifies faster convergence and confirm that we can use our algorithm with relatively few episodes of training. 
 Similarly, other RL algorithm has exploration and exploitation strategies, so we compare the performance of algorithms which are typically using greedy exploitation during testing at any stage.
 
-> Log data is generated at 'CEM-AH' folder. Which could be visualized by running tensorboard i.e.
+Log data is generated at 'CEM-AH' folder. Which could be visualized by running tensorboard i.e.
 ```tensorboard
 tensorboard --logdir=CEM-AH
 ```
