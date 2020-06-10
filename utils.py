@@ -81,61 +81,6 @@ class ReplayMemory(object):
         return len(self.memory)
 
 
-def sample_episodesNorm(env, model, use_cuda, device):
-    episode_reward = 0.0
-    episode_steps = []
-    obs = env.reset()
-    # sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
-    while True:
-        obs_v = torch.FloatTensor([obs.flatten()])
-        # print(obs_v)
-        if use_cuda:
-            obs_v = obs_v.to(device)
-        # standardize observation vector
-        obs_v_norm = (obs_v - obs_v.mean(dim=1, keepdim=True)) / obs_v.std(dim=1, keepdim=True)
-        # print('obs_v:', obs_v.shape)
-        # print(obs_v)
-        # print(next(model.parameters()).is_cuda)
-        act_probs_v = model(obs_v_norm)
-        # act_probs_v = model.forward1(obs_v)
-        # print(act_probs_v)
-        act_probs = act_probs_v.cpu().data.numpy()[0]
-        # print(act_probs)
-        action = np.random.choice(len(act_probs), p=act_probs)
-        # print(action)
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps)
-        obs = next_obs
-
-
-# def sample_episodesNorm_SingleLayer(env, model, seed, use_cuda, device):
-#     episode_reward = 0.0
-#     episode_steps = []
-#     env.seed(seed)
-#     obs = env.reset()
-#
-#     while True:
-#         obs_v = torch.FloatTensor([obs.flatten()])
-#         if use_cuda:
-#             obs_v = obs_v.to(device)
-#         # standardize observation vector
-#         obs_v_norm = (obs_v - obs_v.mean(dim=1, keepdim=True)) / obs_v.std(dim=1, keepdim=True)
-#         act_probs_v = model(obs_v_norm)
-#         act_probs = act_probs_v.cpu().data.numpy()[0]
-#         action = np.random.choice(len(act_probs), p=act_probs)
-#         next_obs, reward, is_done, _ = env.step(action)
-#         episode_reward += reward
-#         episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-#         if is_done:
-#             return Episode(reward=episode_reward, steps=episode_steps)
-#         obs = next_obs
-
-
 def sample_episodesNorm_eval(env, model, ensemble_size, seed, use_cuda, device):
     episode_reward = 0.0
     episode_steps = []
@@ -187,122 +132,6 @@ def sample_episodes_eval_reacher(env, model, ensemble_size, max_steps, sparse_re
     return Episode(reward=episode_reward, steps=episode_steps)
 
 
-def sample_episodesNorm_eval_Rstep(env, model, ensemble_size, seed, use_cuda, device):
-    episode_reward = 0.0
-    episode_steps = []
-    env.seed(seed)
-    obs = env.reset()
-    # sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
-    while True:
-        obs_v = torch.FloatTensor([obs.flatten()])
-        # print(obs_v)
-        if use_cuda:
-            obs_v = obs_v.to(device)
-        # standardize observation vector
-        obs_v_norm = (obs_v - obs_v.mean(dim=1, keepdim=True)) / obs_v.std(dim=1, keepdim=True)
-
-        output = model.ensemble_forward(obs_v_norm, ensemble_size)
-        ensemble_out = torch.sum(output, dim=0).reshape(1, -1)
-        # act_probs_v = model.sm(ensemble_out)
-        act_probs_v = ensemble_out / torch.sum(ensemble_out, dim=1)
-
-        act_probs = act_probs_v.cpu().data.numpy()[0]
-        # print(act_probs)
-        action = np.random.choice(len(act_probs), p=act_probs)
-        # print(action)
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep_R(observation=obs, action=action, action_probs=act_probs, reward=reward))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps)
-        obs = next_obs
-
-
-def sample_episodesNorm_msCEM(env, model, seed=SEED):
-    episode_reward = 0.0
-    episode_steps = []
-    env.seed(seed)  # set environment seed for not randomly generated maze
-    obs = env.reset()
-    # sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
-    while True:
-        obs_v = obs.flatten()
-        # standardize observation vector
-        obs_v_norm = (obs_v - np.mean(obs_v, axis=0)) / np.std(obs_v, axis=0)
-        act_probs = model.forward(obs_v_norm)
-        act_probs = softmax(act_probs)
-        action = np.random.choice(len(act_probs.flatten()), p=act_probs.flatten())
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps)
-        obs = next_obs
-
-
-def sample_episodesNorm_msCEM_genPerStep(env, model, theta_mean, theta_std, seed=SEED):
-    episode_reward = 0.0
-    episode_steps = []
-    env.seed(seed)  # set environment seed for not randomly generated maze
-    obs = env.reset()
-
-    theta_list = []
-    while True:
-        # keep generating new theta at each ep step
-        theta = np.random.multivariate_normal(theta_mean, np.diag(theta_std ** 2))
-        theta_list.append(theta)
-        model.set_theta(theta)
-
-        obs_v = obs.flatten()
-        # standardize observation vector
-        obs_v_norm = (obs_v - np.mean(obs_v, axis=0)) / np.std(obs_v, axis=0)
-        act_probs = model.forward(obs_v_norm)
-        act_probs = softmax(act_probs)
-        action = np.random.choice(len(act_probs.flatten()), p=act_probs.flatten())
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps), theta_list
-        obs = next_obs
-
-
-def sample_episodes_netCEM(env, model, use_cuda, device):
-    episode_reward = 0.0
-    episode_steps = []
-    obs = env.reset()
-    sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
-    while True:
-        obs_v = torch.FloatTensor([obs.flatten()])
-        # print(obs_v)
-        if use_cuda:
-            obs_v = obs_v.to(device)
-        # standardize observation vector
-        obs_v_norm = (obs_v - obs_v.mean(dim=1, keepdim=True)) / obs_v.std(dim=1, keepdim=True)
-        # print('obs_v:', obs_v.shape)
-        # print(obs_v)
-        # print(next(model.parameters()).is_cuda)
-        act_probs_v = sm(model(obs_v_norm))
-        # act_probs_v = model(obs_v)
-        # act_probs_v = model.forward1(obs_v)
-        # print(act_probs_v)
-        act_probs = act_probs_v.cpu().data.numpy()[0]
-        # print(act_probs)
-        action = np.random.choice(len(act_probs), p=act_probs)
-        # print(action)
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps)
-        obs = next_obs
-
-
 def sample_episodes_netCEM2(env, model, use_cuda, device, seed=SEED):
     episode_reward = 0.0
     episode_steps = []
@@ -315,10 +144,6 @@ def sample_episodes_netCEM2(env, model, use_cuda, device, seed=SEED):
             obs_v = obs_v.to(device)
         # standardize observation vector
         obs_v_norm = (obs_v - obs_v.mean(dim=1, keepdim=True)) / obs_v.std(dim=1, keepdim=True)
-        # act_probs_v = sm(model(obs_v_norm))
-        # act_probs = act_probs_v.cpu().data.numpy()[0]
-        # act_probs = np.nan_to_num(act_probs)
-        # act_probs = softmax(act_probs)
         model_out = model(obs_v_norm)
         model_out[torch.isnan(model_out)] = 0
         act_probs_v = sm(model_out)
@@ -362,8 +187,6 @@ def sample_episodes_net_Rstep(env, model, use_cuda, device, seed=SEED):
     env.seed(seed)  # set environment seed for not randomly generated maze
     obs = env.reset()
     sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
     while True:
         obs_v = torch.FloatTensor([obs.flatten()])
         if use_cuda:
@@ -371,13 +194,8 @@ def sample_episodes_net_Rstep(env, model, use_cuda, device, seed=SEED):
         # standardize observation vector
         obs_v_norm = (obs_v - obs_v.mean(dim=1, keepdim=True)) / (obs_v.std(dim=1, keepdim=True) + 1e-9)
         act_probs_v = sm(model(obs_v_norm))
-        # act_probs_v = model(obs_v)
-        # act_probs_v = model.forward1(obs_v)
-        # print(act_probs_v)
         act_probs = act_probs_v.cpu().data.numpy()[0]
-        # print(act_probs)
         action = np.random.choice(len(act_probs), p=act_probs)
-        # print(action)
         next_obs, reward, is_done, _ = env.step(action)
         episode_reward += reward
         episode_steps.append(EpisodeStep_R(observation=obs, action=action, action_probs=act_probs, reward=reward))
@@ -391,7 +209,6 @@ def sample_episodes_net_Rstep_DDPG(env, model, memory, use_cuda, device, seed=SE
     episode_steps = []
     env.seed(seed)  # set environment seed for not randomly generated maze
     obs = env.reset()
-    # sm = nn.Softmax(dim=1)
     while True:
         state = np.float32(obs.flatten())
         # standardize state vector
@@ -408,7 +225,6 @@ def sample_episodes_net_Rstep_DDPG(env, model, memory, use_cuda, device, seed=SE
 
         next_obs, reward, is_done, info = env.step(action)
         episode_reward += reward
-
 
         next_state = np.float32(next_obs.flatten())
         # push this exp in ram
@@ -432,28 +248,19 @@ def sample_episodes_net_Rstep_reacher(env, model, n_actions, steps_done, eps_sta
         obs_v = torch.FloatTensor([obs.flatten()])
         obs_v = obs_v.to(device)
         model_out = model(obs_v)
-        # model_out[torch.isnan(model_out)] = 0  # do not use this because need calculate gradient
         act_probs_v = model_out
-        # action = act_probs_v.cpu().data.numpy().flatten()
 
         # select action
         sample = random.random()
         eps_threshold = eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay)
         steps_done += 1
         if sample > eps_threshold:
-            # action = model(obs_v_norm).max(1)[1].view(1, 1)
             action = act_probs_v.flatten()
         else:
-            # action = torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
-            # action = torch.tensor(np.random.uniform(-1.0, 1.0, size=(n_actions)), device=device)  # random action
             action = act_probs_v.flatten()  # still uses the policy action
 
         next_obs, reward, is_done, _ = env.step(action, sparse_reward, screenshot)
         episode_reward += reward
-        # reward_v = torch.tensor([reward], device=device)
-        # next_obs_v = torch.FloatTensor([next_obs.flatten()])
-        # next_obs_v = next_obs_v.to(device)
-
         episode_steps.append(EpisodeStep_R(observation=obs, action=action.cpu().data.numpy(), action_probs=action.cpu().data.numpy(), reward=reward))
 
         obs = next_obs
@@ -543,26 +350,21 @@ def sample_episodes_net_Rstep_DQN_reacher(env, model, memory, n_actions, steps_d
     episode_steps = []
 
     obs = env.reset(screenshot)
-    # sm = nn.Softmax(dim=1)
     obs_v = torch.FloatTensor([obs.flatten()])
     obs_v = obs_v.to(device)
 
     for step in range(max_steps):
         # get action probabilities, but is not used since DQN here not stochastic policies
         model_out = model(obs_v)
-        # model_out[torch.isnan(model_out)] = 0  # do not use this because need calculate gradient
         act_probs_v = model_out
-        # action = act_probs_v.cpu().data.numpy().flatten()
 
         # select action
         sample = random.random()
         eps_threshold = eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay)
         steps_done += 1
         if sample > eps_threshold:
-            # action = model(obs_v_norm).max(1)[1].view(1, 1)
             action = act_probs_v.flatten()
         else:
-            # action = torch.tensor([[random.randrange(n_actions)]], device=device, dtype=torch.long)
             action = torch.tensor(np.random.uniform(-1.0, 1.0, size=(n_actions)), device=device)
 
         next_obs, reward, is_done, _ = env.step(action, sparse_reward, screenshot)
@@ -584,80 +386,11 @@ def sample_episodes_net_Rstep_DQN_reacher(env, model, memory, n_actions, steps_d
     return memory, steps_done, Episode(reward=episode_reward, steps=episode_steps)
 
 
-
-def sample_episodes2(env, model, use_cuda, device):
-    episode_reward = 0.0
-    episode_steps = []
-    obs = env.reset()
-    sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
-    while True:
-        obs_v = torch.FloatTensor([obs.flatten()])
-        # print(obs_v)
-        if use_cuda:
-            obs_v = obs_v.to(device)
-        # print('obs_v:', obs_v.shape)
-        # print(obs_v)
-        # print(next(model.parameters()).is_cuda)
-        act_probs_v = sm(model(obs_v))
-        # act_probs_v = model(obs_v)
-        # act_probs_v = model.forward1(obs_v)
-        # print(act_probs_v)
-        act_probs = act_probs_v.cpu().data.numpy()[0]
-        # print(act_probs)
-        action = np.random.choice(len(act_probs), p=act_probs)
-        # print(action)
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps)
-        obs = next_obs
-
-
-def sample_episodeW(env, model, use_cuda, device):
-    episode_reward = 0.0
-    episode_steps = []
-    obs = env.reset()
-    # sm = nn.Softmax(dim=1)
-    # print(use_cuda)
-    # print(device)
-    while True:
-        obs_v = torch.FloatTensor([obs.flatten()])
-        # print(obs_v)
-        if use_cuda:
-            obs_v = obs_v.to(device)
-        # print('obs_v:', obs_v.shape)
-        # print(obs_v)
-        # print(next(model.parameters()).is_cuda)
-        act_probs_v = model(obs_v)
-        # act_probs_v = model.forward1(obs_v)
-        # print(act_probs_v)
-        act_probs = act_probs_v.cpu().data.numpy()[0]
-        # print(act_probs)
-        action = np.random.choice(len(act_probs), p=act_probs)
-        # print(action)
-        next_obs, reward, is_done, _ = env.step(action)
-        episode_reward += reward
-        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=act_probs))
-        if is_done:
-            return Episode(reward=episode_reward, steps=episode_steps)
-        obs = next_obs
-
-
-# def iterate_model_batchesNorm_msCEM(env, model, batch_size):
-#     batch = []
-#     for episodes in range(batch_size):
-#         batch.append(sample_episodesNorm_msCEM(env, model))
-#     return batch
-
-
-# def iterate_model_batches_net_Rstep(env, model, batch_size, use_cuda=False, device=torch.device("cuda:0")):
-#     batch = []
-#     for episodes in range(batch_size):
-#         batch.append(sample_episodes_net_Rstep(env, model, use_cuda, device))
-#     return batch
+def iterate_model_batches_net_Rstep(env, model, batch_size, use_cuda=False, device=torch.device("cuda:0")):
+    batch = []
+    for episodes in range(batch_size):
+        batch.append(sample_episodes_net_Rstep(env, model, use_cuda, device))
+    return batch
 
 
 def iterate_model_batches_net_Rstep_DDPG(env, model, memory, batch_size, use_cuda=False, device=torch.device("cuda:0"), train=False):
@@ -667,66 +400,20 @@ def iterate_model_batches_net_Rstep_DDPG(env, model, memory, batch_size, use_cud
     return batch
 
 
-# def iterate_model_batches_net_Rstep_reacher(env, model, batch_size, n_actions, steps_done, eps_start, eps_end, eps_decay, max_steps, sparse_reward, screenshot, use_cuda=False, device=torch.device("cuda:0")):
-#     batch = []
-#     for episodes in range(batch_size):
-#         batch.append(sample_episodes_net_Rstep_reacher(env, model, n_actions, steps_done, eps_start, eps_end, eps_decay, max_steps, sparse_reward, screenshot, use_cuda, device))
-#     return batch
-#
-#
-# def iterate_model_batches_net_Rstep_reacher_DDPG(env, model, memory, batch_size, n_actions, max_steps, sparse_reward, screenshot, use_cuda=False, device=torch.device("cuda:0"), train=True):
-#     batch = []
-#     for episodes in range(batch_size):
-#         batch.append(sample_episodes_net_Rstep_reacher_DDPG(env, model, memory, n_actions, max_steps, sparse_reward, screenshot, use_cuda, device, train))
-#     return batch
-
-
-# def iterate_model_batches_net_Rstep_DQN(env, model, memory, n_actions, steps_done, eps_start, eps_end, eps_decay, batch_size, use_cuda=False, device=torch.device("cuda:0"), seed=SEED):
-#     batch = []
-#     steps_done_ep = steps_done
-#     for episodes in range(batch_size):
-#         memory, steps_done_ep, sampled_ep = sample_episodes_net_Rstep_DQN(env, model, memory, n_actions, steps_done_ep,
-#                                                                              eps_start, eps_end, eps_decay, use_cuda,
-#                                                                              device, seed)
-#         batch.append(sampled_ep)
-#         # steps_done += 1
-#     return memory, steps_done_ep, batch
-
-
-# def iterate_model_batches_netCEM(env, model, batch_size, use_cuda=False, device=torch.device("cuda:0")):
-#     batch = []
-#     for episodes in range(batch_size):
-#         batch.append(sample_episodes_netCEM(env, model, use_cuda, device))
-#     return batch
-
-
-# def iterate_model_batchesWB_msCEM(env, model, theta, agent_start_list, batch_size, seed):
-#     batch = []
-#     # set the current model's generated weights
-#     model.set_theta(theta)
-#     # sample episodes
-#     for agent_start in agent_start_list:
-#         start_pos = agent_start[0]  # col, row
-#         start_dir = agent_start[1]
-#         env.set_initial_pos_dir(start_pos, start_dir)
-#         ep_batch = []
-#         for episodes in range(batch_size):
-#             ep_batch.append(sample_episodesNorm_msCEM(env, model, seed=seed))
-#         batch.extend(ep_batch)
-#         # print(len(batch))
-#     # also calculate the average reward of this model batch
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_mean = float(np.mean(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     return WeightEp(weight=theta, ave_reward=reward_mean, ave_steps=step_counts_mean, episodes=batch)
+def iterate_model_batches_net_Rstep_DQN(env, model, memory, n_actions, steps_done, eps_start, eps_end, eps_decay, batch_size, use_cuda=False, device=torch.device("cuda:0"), seed=SEED):
+    batch = []
+    steps_done_ep = steps_done
+    for episodes in range(batch_size):
+        memory, steps_done_ep, sampled_ep = sample_episodes_net_Rstep_DQN(env, model, memory, n_actions, steps_done_ep,
+                                                                             eps_start, eps_end, eps_decay, use_cuda,
+                                                                             device, seed)
+        batch.append(sampled_ep)
+    return memory, steps_done_ep, batch
 
 
 def iterate_model_batchesWB_msCEM2(env, model, theta, agent_start_list, batch_size, use_cuda, device, seed):
     batch = []
     # set the current model's generated weights
-    # model.set_theta(theta)
     theta_tensor = torch.FloatTensor(theta.flatten())
     loadWeight_dict = getLoadWeightDict(model.state_dict(), theta_tensor)
     model.load_state_dict(loadWeight_dict)
@@ -740,7 +427,6 @@ def iterate_model_batchesWB_msCEM2(env, model, theta, agent_start_list, batch_si
         for episodes in range(batch_size):
             ep_batch.append(sample_episodes_netCEM2(env, model, use_cuda, device, seed=seed))
         batch.extend(ep_batch)
-        # print(len(batch))
     # also calculate the average reward of this model batch
     rewards = list(map(lambda s: s.reward, batch))
     reward_mean = float(np.mean(rewards))
@@ -772,132 +458,6 @@ def iterate_model_batchesWB_msCEM2_reacher(env, model, theta, agent_start_list, 
     return WeightEp(weight=theta, ave_reward=reward_mean, ave_steps=step_counts_mean, episodes=batch)
 
 
-# def filter_batch(batch, percentile):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_bound = np.percentile(rewards, percentile)
-#     reward_mean = float(np.mean(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     train_obs = []
-#     train_act = []
-#     train_act_probs = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.reward < reward_bound:
-#             unfit_count += 1
-#             continue
-#         train_obs.extend(map(lambda step: step.observation, example.steps))
-#         train_act.extend(map(lambda step: step.action, example.steps))
-#         train_act_probs.extend(map(lambda step: step.action_probs, example.steps))
-#
-#     train_obs_v = torch.FloatTensor(train_obs)
-#     train_act_v = torch.LongTensor(train_act)  # train_act needs to be a list
-#     train_act_probs = torch.FloatTensor(train_act_probs)
-#     return train_obs_v, train_act_v, train_act_probs, reward_bound, reward_mean, np.max(rewards), np.min(step_counts), step_counts_mean, unfit_count
-
-
-# def filter_elite_batch(batch, percentile):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_bound = np.percentile(rewards, percentile)
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     elite_batch = []
-#     top_batch =[]
-#     train_obs = []
-#     train_act = []
-#     train_act_probs = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.reward < reward_bound:
-#             unfit_count += 1
-#             continue
-#         elite_batch.append(example)
-#         if example.reward == reward_max:
-#             top_batch.append(example)
-#         train_obs.extend(map(lambda step: step.observation, example.steps))
-#         train_act.extend(map(lambda step: step.action, example.steps))
-#         train_act_probs.extend(map(lambda step: step.action_probs, example.steps))
-#
-#     train_obs_v = torch.FloatTensor(train_obs)
-#     # train_act_v = torch.LongTensor(train_act)
-#     train_act_v = torch.FloatTensor(train_act)
-#     train_act_probs = torch.FloatTensor(train_act_probs)
-#     return elite_batch, top_batch, train_obs_v, train_act_v, train_act_probs, reward_bound, reward_mean, reward_max, np.min(step_counts), step_counts_mean, unfit_count
-
-
-# def filter_elite_batch_accumR(batch, percentile):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_bound = np.percentile(rewards, percentile)
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     reward_accum = float(np.sum(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     elite_batch = []
-#     top_batch =[]
-#     train_obs = []
-#     train_act = []
-#     train_act_probs = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.reward < reward_bound:
-#             unfit_count += 1
-#             continue
-#         elite_batch.append(example)
-#         if example.reward == reward_max:
-#             top_batch.append(example)
-#         train_obs.extend(map(lambda step: step.observation, example.steps))
-#         train_act.extend(map(lambda step: step.action, example.steps))
-#         train_act_probs.extend(map(lambda step: step.action_probs, example.steps))
-#
-#     train_obs_v = torch.FloatTensor(train_obs)
-#     # train_act_v = torch.LongTensor(train_act)
-#     train_act_v = torch.FloatTensor(train_act)
-#     train_act_probs = torch.FloatTensor(train_act_probs)
-#     return elite_batch, top_batch, train_obs_v, train_act_v, train_act_probs, reward_bound, reward_mean, reward_max, reward_accum, np.min(step_counts), step_counts_mean, unfit_count
-
-
-# def filter_elite_batch2(batch, percentile):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     up_reward_bound = np.percentile(rewards, percentile)
-#     low_reward_bound = np.percentile(rewards, 100-percentile)
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     elite_batch = []
-#     top_batch =[]
-#     bot_batch = []
-#     train_obs = []
-#     train_act = []
-#     train_act_probs = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.reward <= low_reward_bound:
-#             bot_batch.append(example)
-#         if example.reward < up_reward_bound:
-#             unfit_count += 1
-#             continue
-#         elite_batch.append(example)
-#         if example.reward == reward_max:
-#             top_batch.append(example)
-#         train_obs.extend(map(lambda step: step.observation, example.steps))
-#         train_act.extend(map(lambda step: step.action, example.steps))
-#         train_act_probs.extend(map(lambda step: step.action_probs, example.steps))
-#
-#     train_obs_v = torch.FloatTensor(train_obs)
-#     # train_act_v = torch.LongTensor(train_act)
-#     train_act_v = torch.FloatTensor(train_act)
-#     train_act_probs = torch.FloatTensor(train_act_probs)
-#     return elite_batch, top_batch, bot_batch, train_obs_v, train_act_v, train_act_probs, up_reward_bound, reward_mean, reward_max, np.min(step_counts), step_counts_mean, unfit_count
-
-
 def concatWeights(weightList, device):
     weight_tensor = torch.zeros(0).to(device)
     for weight in weightList:
@@ -911,88 +471,6 @@ def concatWeights_3D(weightList, device):
         mod_weightList.append(weight.reshape(weight.shape[0],-1))
     weight_tensor = torch.cat(mod_weightList, dim=1)
     return weight_tensor
-
-
-# def filter_elite_batchW(batch, percentile, device):
-#     # take note the rewards here are already the average rewards of the individual models (each model has a set of episodes)
-#     rewards = list(map(lambda s: s.ave_reward, batch))
-#     reward_bound = np.percentile(rewards, percentile)
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     step_counts = list(map(lambda s: s.ave_steps, batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     elite_batch = []
-#     top_batch =[]
-#     train_weights = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.ave_reward < reward_bound:
-#             unfit_count += 1
-#             continue
-#         elite_batch.append(example)
-#         if example.ave_reward == reward_max:
-#             top_batch.append(example)
-#
-#         train_weights.append(concatWeights(example.weight, device))
-#
-#     train_weights_v = torch.cat(train_weights, dim=0)
-#     return elite_batch, top_batch, train_weights_v, reward_bound, reward_mean, reward_max, np.min(step_counts), step_counts_mean, unfit_count
-#
-#
-# def filter_elite_batchW_msCEM(batch, percentile):
-#     # take note the rewards here are already the average rewards of the individual models (each model has a set of episodes)
-#     rewards = list(map(lambda s: s.ave_reward, batch))
-#     reward_bound = np.percentile(rewards, percentile)
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     step_counts = list(map(lambda s: s.ave_steps, batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     elite_batch = []
-#     top_batch =[]
-#     elite_weights = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.ave_reward < reward_bound:
-#             unfit_count += 1
-#             continue
-#         elite_batch.append(example)
-#         if example.ave_reward == reward_max:
-#             top_batch.append(example)
-#
-#         elite_weights.append(example.weight)
-#
-#     # train_weights_v = torch.cat(train_weights, dim=0)
-#     return elite_batch, top_batch, elite_weights, reward_bound, reward_mean, reward_max, np.min(step_counts), step_counts_mean, unfit_count
-#
-#
-# def filter_elite_batchW_msCEM_accumR(batch, percentile):
-#     # take note the rewards here are already the average rewards of the individual models (each model has a set of episodes)
-#     rewards = list(map(lambda s: s.ave_reward, batch))
-#     reward_bound = np.percentile(rewards, percentile)
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     reward_accum = float(np.sum(rewards))
-#     step_counts = list(map(lambda s: s.ave_steps, batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     elite_batch = []
-#     top_batch =[]
-#     elite_weights = []
-#     unfit_count = 0
-#     for example in batch:
-#         if example.ave_reward < reward_bound:
-#             unfit_count += 1
-#             continue
-#         elite_batch.append(example)
-#         if example.ave_reward == reward_max:
-#             top_batch.append(example)
-#
-#         elite_weights.append(example.weight)
-#
-#     # train_weights_v = torch.cat(train_weights, dim=0)
-#     return elite_batch, top_batch, elite_weights, reward_bound, reward_mean, reward_max, reward_accum, np.min(step_counts), step_counts_mean, unfit_count
 
 
 def filter_elite_batchW_msCEM_accumR_std(batch, percentile):
@@ -1080,23 +558,6 @@ def convert_weightbatch_obs_act(batch):
     return train_obs_v, train_act_v, train_act_probs
 
 
-# def get_batch_stats(batch):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_mean = float(np.mean(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#     return reward_mean, step_counts_mean
-
-
-# def get_batch_stats_accumR(batch):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_mean = float(np.mean(rewards))
-#     reward_accum = float(np.sum(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#     return reward_mean, reward_accum, step_counts_mean
-
-
 def get_batch_stats_eval(batch, percentile):
     rewards = list(map(lambda s: s.reward, batch))
     reward_mean = float(np.mean(rewards))
@@ -1124,38 +585,6 @@ def get_batch_statsW(batch):
     step_counts = list(map(lambda s: s.ave_steps, batch))
     step_counts_mean = float(np.mean(step_counts))
     return reward_mean, step_counts_mean
-
-
-# def get_batch_accumR(batch, gamma=0.9):
-#     rewards = list(map(lambda s: s.reward, batch))
-#     reward_mean = float(np.mean(rewards))
-#     reward_max = float(np.max(rewards))
-#     reward_accum = float(np.sum(rewards))
-#     step_counts = list(map(lambda s: len(s.steps), batch))
-#     step_counts_mean = float(np.mean(step_counts))
-#
-#     train_obs = []
-#     train_act = []
-#     train_act_probs = []
-#     train_rewards = []
-#     discount_rewards = []
-#
-#     for example in batch:
-#         train_obs.extend(map(lambda step: step.observation, example.steps))
-#         train_act.extend(map(lambda step: step.action, example.steps))
-#         train_act_probs.extend(map(lambda step: step.action_probs, example.steps))
-#
-#         reward_list = list(map(lambda step: step.reward, example.steps))
-#         discounted_reward = get_discounted_rewards(reward_list, gamma)
-#         train_rewards.extend(reward_list)
-#         discount_rewards.extend(discounted_reward)
-#
-#     train_obs_v = torch.FloatTensor(train_obs)
-#     train_act_v = torch.LongTensor(train_act)
-#     train_act_probs = torch.FloatTensor(train_act_probs)
-#     train_rewards = torch.FloatTensor(train_rewards)
-#     train_discount_rewards = torch.FloatTensor(discount_rewards)
-#     return train_obs_v, train_act_v, train_act_probs, train_rewards, train_discount_rewards, reward_mean, reward_max, reward_accum, np.min(step_counts), step_counts_mean
 
 
 def get_batch_accumR_std(batch, gamma=0.9):

@@ -26,11 +26,11 @@ import utils
 sm = nn.Softmax(dim=1)
 
 def load_args():
-    parser = argparse.ArgumentParser(description='param-wgan')
+    parser = argparse.ArgumentParser(description='param')
     # parser.add_argument('--exp', default='maze', type=str, help='experiment')
     parser.add_argument('--z', default=200, type=int, help='latent space width')
     parser.add_argument('--ze', default=100, type=int, help='encoder dimension')
-    parser.add_argument('--epochs', default=10000, type=int)
+    parser.add_argument('--epochs', default=500, type=int)
 
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--layer', default=2, type=int)
@@ -212,7 +212,7 @@ if __name__ == '__main__':
     use_cuda = args.use_cuda
     DEVICE = args.device
     # monitor_directory = 'monitor_CEM-AH'
-    model_directory = 'model_all_CEM-AH'
+    model_directory = 'model_CEM-AH'
     writer_directory = args.write_dir
 
     exp_name = 'MiniGrid-SimpleCrossingModS9N3-v0'

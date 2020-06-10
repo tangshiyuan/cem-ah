@@ -352,60 +352,6 @@ class CEM_AH_3Layer_continuous(nn.Module):
         return self.l1, self.b1, self.l2, self.b2
 
 
-# class NetW_DQN(nn.Module):
-#     def __init__(self, args, obs_size, n_actions):
-#         super(NetW_DQN, self).__init__()
-#         for k, v in vars(args).items():
-#             setattr(self, k, v)
-#         self.linear1 = nn.Linear(obs_size, self.hidden_s)
-#         self.relu = nn.ReLU()
-#         self.linear2 = nn.Linear(self.hidden_s, n_actions)
-#         self.tanh = nn.Tanh()
-#
-#     def forward(self, x):
-#         x = self.linear1(x)
-#         x = self.relu(x)
-#         x = self.linear2(x)
-#         x = self.tanh(x)
-#         return x
-#
-#
-# class NetW_DQN2(nn.Module):
-#     def __init__(self, args, obs_size, n_actions):
-#         super(NetW_DQN2, self).__init__()
-#         for k, v in vars(args).items():
-#             setattr(self, k, v)
-#         self.linear1 = nn.Linear(obs_size, self.hidden_s)
-#         self.relu = nn.ReLU()
-#         self.linear2 = nn.Linear(self.hidden_s, self.hidden_s)
-#         self.linear3 = nn.Linear(self.hidden_s, n_actions)
-#         self.tanh = nn.Tanh()
-#         # self.sm = nn.Softmax(dim=1)
-#
-#     def forward(self, x):
-#         x = self.linear1(x)
-#         x = self.relu(x)
-#         x = self.linear2(x)
-#         x = self.relu(x)
-#         x = self.linear3(x)
-#         x = self.tanh(x)
-#         return x
-
-
-# class NetW_SingleLayer(nn.Module):
-#     def __init__(self, args, obs_size, n_actions):
-#         super(NetW_SingleLayer, self).__init__()
-#         for k, v in vars(args).items():
-#             setattr(self, k, v)
-#         self.linear1 = nn.Linear(obs_size, n_actions)
-#         self.tanh = nn.Tanh()
-#
-#     def forward(self, x):
-#         x = self.linear1(x)
-#         x = self.tanh(x)
-#         return x
-
-
 class NetW_2Layer(nn.Module):
     def __init__(self, args, obs_size, n_actions):
         super(NetW_2Layer, self).__init__()
@@ -436,6 +382,34 @@ class NetW_3Layer(nn.Module):
         x = self.linear2(x)
         x = self.tanh(x)
         return x
+
+
+class CEM_QtOpt(nn.Module):
+    def __init__(self, n_actions, action_lim):
+        super(CEM_QtOpt, self).__init__()
+        self.n_actions = n_actions
+        self.action_lim = action_lim
+        self.dim_theta = self.n_actions
+        self.theta_mean = np.zeros(self.dim_theta).flatten()
+        self.theta_std = np.ones(self.dim_theta).flatten()
+
+    def initialize(self):
+        self.theta_mean = np.zeros(self.dim_theta).flatten()
+        self.theta_std = np.ones(self.dim_theta).flatten()
+
+    def sample(self):
+        theta = np.random.multivariate_normal(self.theta_mean, np.diag(self.theta_std ** 2))
+        return theta
+
+    def sample_multi(self, n):
+        self.theta_list = np.vstack(
+            [np.random.multivariate_normal(self.theta_mean, np.diag(self.theta_std ** 2)) for _ in range(n)])
+        return self.theta_list
+
+    def update(self, elite_thetas):
+        self.theta_mean = np.mean(elite_thetas, axis=0).flatten()
+        self.theta_std = np.std(elite_thetas, axis=0).flatten()
+        return self.theta_mean, self.theta_std
 
 
 class EncoderW(nn.Module):
@@ -594,6 +568,7 @@ def fanin_init(size, fanin=None):
 
 DDPG_EPS = 0.003
 
+
 class Critic_DDPG_2Layer(nn.Module):
 
     def __init__(self, args, state_dim, action_dim):
@@ -603,6 +578,84 @@ class Critic_DDPG_2Layer(nn.Module):
         :return:
         """
         super(Critic_DDPG_2Layer, self).__init__()
+        for k, v in vars(args).items():
+            setattr(self, k, v)
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+
+        self.fcs1 = nn.Linear(state_dim, self.hidden_s)
+        self.fcs1.weight.data = fanin_init(self.fcs1.weight.data.size())
+
+        self.fca1 = nn.Linear(action_dim, self.hidden_s)
+        self.fca1.weight.data = fanin_init(self.fca1.weight.data.size())
+
+        self.fc3 = nn.Linear(self.hidden_s*2, 1)
+        self.fc3.weight.data.uniform_(-DDPG_EPS,DDPG_EPS)
+
+    def forward(self, state, action):
+        """
+        returns Value function Q(s,a) obtained from critic network
+        :param state: Input state (Torch Variable : [n,state_dim] )
+        :param action: Input Action (Torch Variable : [n,action_dim] )
+        :return: Value function : Q(S,a) (Torch Variable : [n,1] )
+        """
+        s1 = F.relu(self.fcs1(state))
+        a1 = F.relu(self.fca1(action))
+        x = torch.cat((s1, a1), dim=1)
+
+        x = self.fc3(x)
+
+        return x
+
+
+class Actor_DDPG_2Layer(nn.Module):
+
+    def __init__(self, args, state_dim, action_dim, action_lim):
+        """
+        :param state_dim: Dimension of input state (int)
+        :param action_dim: Dimension of output action (int)
+        :param action_lim: Used to limit action in [-action_lim,action_lim]
+        :return:
+        """
+        super(Actor_DDPG_2Layer, self).__init__()
+        for k, v in vars(args).items():
+            setattr(self, k, v)
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.action_lim = action_lim
+
+        self.fc1 = nn.Linear(state_dim, action_dim)
+        self.fc1.weight.data.uniform_(-DDPG_EPS,DDPG_EPS)
+        self.tanh = nn.Tanh()
+
+    def forward(self, state):
+        """
+        returns policy function Pi(s) obtained from actor network
+        this function is a gaussian prob distribution for all actions
+        with mean lying in (-1,1) and sigma lying in (0,1)
+        The sampled action can , then later be rescaled
+        :param state: Input state (Torch Variable : [n,state_dim] )
+        :return: Output action (Torch Variable: [n,action_dim] )
+        """
+        x = self.fc1(state)
+        action = self.tanh(x)
+
+        action = action * self.action_lim
+
+        return action
+
+
+class Critic_DDPG_3Layer(nn.Module):
+
+    def __init__(self, args, state_dim, action_dim):
+        """
+        :param state_dim: Dimension of input state (int)
+        :param action_dim: Dimension of input action (int)
+        :return:
+        """
+        super(Critic_DDPG_3Layer, self).__init__()
         for k, v in vars(args).items():
             setattr(self, k, v)
 
@@ -642,7 +695,7 @@ class Critic_DDPG_2Layer(nn.Module):
         return x
 
 
-class Actor_DDPG_2Layer(nn.Module):
+class Actor_DDPG_3Layer(nn.Module):
 
     def __init__(self, args, state_dim, action_dim, action_lim):
         """
@@ -651,7 +704,7 @@ class Actor_DDPG_2Layer(nn.Module):
         :param action_lim: Used to limit action in [-action_lim,action_lim]
         :return:
         """
-        super(Actor_DDPG_2Layer, self).__init__()
+        super(Actor_DDPG_3Layer, self).__init__()
         for k, v in vars(args).items():
             setattr(self, k, v)
 
@@ -677,92 +730,6 @@ class Actor_DDPG_2Layer(nn.Module):
         """
         x = F.relu(self.fc1(state))
         x = self.fc2(x)
-        action = self.tanh(x)
-
-        action = action * self.action_lim
-
-        return action
-
-
-class Critic_DDPG_SingleLayer(nn.Module):
-
-    def __init__(self, args, state_dim, action_dim):
-        """
-        :param state_dim: Dimension of input state (int)
-        :param action_dim: Dimension of input action (int)
-        :return:
-        """
-        super(Critic_DDPG_SingleLayer, self).__init__()
-        for k, v in vars(args).items():
-            setattr(self, k, v)
-
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-
-        self.fcs1 = nn.Linear(state_dim, self.hidden_s)
-        self.fcs1.weight.data = fanin_init(self.fcs1.weight.data.size())
-        # self.fcs2 = nn.Linear(256,128)
-        # self.fcs2.weight.data = fanin_init(self.fcs2.weight.data.size())
-
-        self.fca1 = nn.Linear(action_dim, self.hidden_s)
-        self.fca1.weight.data = fanin_init(self.fca1.weight.data.size())
-
-        # self.fc2 = nn.Linear(256,128)
-        # self.fc2.weight.data = fanin_init(self.fc2.weight.data.size())
-
-        self.fc3 = nn.Linear(self.hidden_s*2, 1)
-        self.fc3.weight.data.uniform_(-DDPG_EPS,DDPG_EPS)
-
-    def forward(self, state, action):
-        """
-        returns Value function Q(s,a) obtained from critic network
-        :param state: Input state (Torch Variable : [n,state_dim] )
-        :param action: Input Action (Torch Variable : [n,action_dim] )
-        :return: Value function : Q(S,a) (Torch Variable : [n,1] )
-        """
-        s1 = F.relu(self.fcs1(state))
-        # s2 = F.relu(self.fcs2(s1))
-        a1 = F.relu(self.fca1(action))
-        # x = torch.cat((s2,a1),dim=1)
-        x = torch.cat((s1, a1), dim=1)
-
-        # x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-
-        return x
-
-
-class Actor_DDPG_SingleLayer(nn.Module):
-
-    def __init__(self, args, state_dim, action_dim, action_lim):
-        """
-        :param state_dim: Dimension of input state (int)
-        :param action_dim: Dimension of output action (int)
-        :param action_lim: Used to limit action in [-action_lim,action_lim]
-        :return:
-        """
-        super(Actor_DDPG_SingleLayer, self).__init__()
-        for k, v in vars(args).items():
-            setattr(self, k, v)
-
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.action_lim = action_lim
-
-        self.fc1 = nn.Linear(state_dim, action_dim)
-        self.fc1.weight.data.uniform_(-DDPG_EPS,DDPG_EPS)
-        self.tanh = nn.Tanh()
-
-    def forward(self, state):
-        """
-        returns policy function Pi(s) obtained from actor network
-        this function is a gaussian prob distribution for all actions
-        with mean lying in (-1,1) and sigma lying in (0,1)
-        The sampled action can , then later be rescaled
-        :param state: Input state (Torch Variable : [n,state_dim] )
-        :return: Output action (Torch Variable: [n,action_dim] )
-        """
-        x = self.fc1(state)
         action = self.tanh(x)
 
         action = action * self.action_lim
