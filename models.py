@@ -384,6 +384,27 @@ class NetW_3Layer(nn.Module):
         return x
 
 
+class NetW_4Layer(nn.Module):
+    def __init__(self, args, obs_size, n_actions):
+        super(NetW_4Layer, self).__init__()
+        for k, v in vars(args).items():
+            setattr(self, k, v)
+        self.linear1 = nn.Linear(obs_size, 400)  # self.hidden_s
+        self.linear2 = nn.Linear(400, 300)
+        self.linear3 = nn.Linear(300, n_actions)
+        self.relu = nn.ReLU()
+        self.tanh = nn.Tanh()
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        x = self.relu(x)
+        x = self.linear3(x)
+        x = self.tanh(x)
+        return x
+
+
 class CEM_QtOpt(nn.Module):
     def __init__(self, n_actions, action_lim):
         super(CEM_QtOpt, self).__init__()
@@ -642,7 +663,8 @@ class Actor_DDPG_2Layer(nn.Module):
         x = self.fc1(state)
         action = self.tanh(x)
 
-        action = action * self.action_lim
+        action = action.cpu().data.numpy() * self.action_lim
+        action = torch.FloatTensor(action)
 
         return action
 
@@ -732,6 +754,93 @@ class Actor_DDPG_3Layer(nn.Module):
         x = self.fc2(x)
         action = self.tanh(x)
 
-        action = action * self.action_lim
+        action = action.cpu().data.numpy() * self.action_lim
+        action = torch.FloatTensor(action)
+
+        return action
+
+
+class Critic_DDPG_4Layer(nn.Module):
+
+    def __init__(self, args, state_dim, action_dim):
+        """
+        :param state_dim: Dimension of input state (int)
+        :param action_dim: Dimension of input action (int)
+        :return:
+        """
+        super(Critic_DDPG_4Layer, self).__init__()
+        for k, v in vars(args).items():
+            setattr(self, k, v)
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+
+        self.fc1 = nn.Linear(state_dim + action_dim, 400)  # self.hidden_s
+        self.fc1.weight.data = fanin_init(self.fc1.weight.data.size())
+
+        self.fc2 = nn.Linear(400, 300)
+        self.fc2.weight.data = fanin_init(self.fc2.weight.data.size())
+
+        self.fc3 = nn.Linear(300, 1)
+        self.fc3.weight.data.uniform_(-DDPG_EPS, DDPG_EPS)
+
+    def forward(self, state, action):
+        """
+        returns Value function Q(s,a) obtained from critic network
+        :param state: Input state (Torch Variable : [n,state_dim] )
+        :param action: Input Action (Torch Variable : [n,action_dim] )
+        :return: Value function : Q(S,a) (Torch Variable : [n,1] )
+        """
+        x = torch.cat((state, action), dim=1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+
+        return x
+
+
+class Actor_DDPG_4Layer(nn.Module):
+
+    def __init__(self, args, state_dim, action_dim, action_lim):
+        """
+        :param state_dim: Dimension of input state (int)
+        :param action_dim: Dimension of output action (int)
+        :param action_lim: Used to limit action in [-action_lim,action_lim]
+        :return:
+        """
+        super(Actor_DDPG_4Layer, self).__init__()
+        for k, v in vars(args).items():
+            setattr(self, k, v)
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.action_lim = action_lim
+
+        self.fc1 = nn.Linear(state_dim, 400)  # self.hidden_s
+        self.fc1.weight.data = fanin_init(self.fc1.weight.data.size())
+
+        self.fc2 = nn.Linear(400, 300)
+        self.fc2.weight.data = fanin_init(self.fc2.weight.data.size())
+
+        self.fc3 = nn.Linear(300, action_dim)
+        self.fc3.weight.data.uniform_(-DDPG_EPS, DDPG_EPS)
+        self.tanh = nn.Tanh()
+
+    def forward(self, state):
+        """
+        returns policy function Pi(s) obtained from actor network
+        this function is a gaussian prob distribution for all actions
+        with mean lying in (-1,1) and sigma lying in (0,1)
+        The sampled action can , then later be rescaled
+        :param state: Input state (Torch Variable : [n,state_dim] )
+        :return: Output action (Torch Variable: [n,action_dim] )
+        """
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        action = self.tanh(x)
+
+        action = action.cpu().data.numpy() * self.action_lim
+        action = torch.FloatTensor(action)
 
         return action

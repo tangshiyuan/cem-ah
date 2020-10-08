@@ -1,6 +1,6 @@
 import os, os.path
 import pickle
-# import gym
+import gym
 import numpy as np
 import argparse
 import time
@@ -20,9 +20,7 @@ import torch.utils.data
 from torch.nn import functional as F
 from torch.autograd import Variable
 
-# import gym_minigrid
-# from gym import wrappers
-from gym_minigrid.wrappers import *
+import pybulletgym
 
 import models
 import utils
@@ -139,6 +137,9 @@ class DDPG(nn.Module):
         state = state.to(device)
         action = self.actor.forward(state).detach()
         new_action = action.cpu().data.numpy() + (self.noise.sample() * self.action_lim)
+        # new_action = (action.cpu().data.numpy() + np.random.normal(0, NOISE, size=env.action_space.shape[0])).clip(
+        #     env.action_space.low, env.action_space.high)
+
         return new_action
 
     def optimize(self):
@@ -160,7 +161,7 @@ class DDPG(nn.Module):
 
         # ---------------------- optimize critic ----------------------
         # Use target actor exploitation policy here for loss evaluation
-        a2 = self.target_actor.forward(s2).detach()
+        a2 = self.target_actor.forward(s2).detach().to(device)
         next_val = torch.squeeze(self.target_critic.forward(s2, a2).detach())
         y_expected = r1 + GAMMA * next_val
         y_predicted = torch.squeeze(self.critic.forward(s1, a1))
@@ -172,7 +173,7 @@ class DDPG(nn.Module):
         self.critic_optimizer.step()
 
         # ---------------------- optimize actor ----------------------
-        pred_a1 = self.actor.forward(s1)
+        pred_a1 = self.actor.forward(s1).to(device)
         loss_actor = -1 * torch.sum(self.critic.forward(s1, pred_a1))
         loss_actor_value = loss_actor.item()
         self.actor_optimizer.zero_grad()
@@ -211,12 +212,14 @@ def load_args():
     parser = argparse.ArgumentParser(description='param')
     parser.add_argument('--epochs', default=50000, type=int)
 
-    parser.add_argument('--lr', default=3e-4, type=float)
-    parser.add_argument('--layer', default=2, type=int)
+    parser.add_argument('--lr', default=1e-3, type=float)
+    parser.add_argument('--layer', default=4, type=int)
     parser.add_argument('--batch_size', default=100, type=int)
-    parser.add_argument('--hidden_s', default=100, type=int)
+    parser.add_argument('--hidden_s', default=400, type=int)
+    parser.add_argument('--exp_name', default='AntPyBulletEnv-v0', type=str)
     parser.add_argument('--percentile', default=90, type=int)
-    parser.add_argument('--use_cuda', default=False, type=bool)
+    parser.add_argument("--expl_noise", default=0.1, type=float)  # Std of Gaussian exploration noise
+    parser.add_argument('--use_cuda', default=True, type=bool)
     parser.add_argument('--device', default='0', type=str)
     parser.add_argument('--comment', default='', type=str)
     parser.add_argument('--write_dir', default='DDPG', type=str)
@@ -293,6 +296,7 @@ if __name__ == '__main__':
 
     EPOCHS = vars(args)['epochs']
     HIDDEN_SIZE = vars(args)['hidden_s']
+    EXP_NAME = vars(args)['exp_name']
     LEARNING_RATE = vars(args)['lr']
     LAYER = vars(args)['layer']
     BATCH_SIZE = vars(args)['batch_size']  # number of training batches sampled from replay buffer
@@ -302,13 +306,15 @@ if __name__ == '__main__':
     # monitor_directory = 'monitor_DDPG'
     model_directory = 'model_DDPG'
     writer_directory = args.write_dir
-    exp_name = 'MiniGrid-SimpleCrossingModS9N3-v0'
+
+    exp_name = EXP_NAME
     COMMENT = args.comment
     SEED = 110
 
     TRAIN_BATCH_SIZE = BATCH_SIZE
-    GAMMA = 0.9
-    TAU = 1e-2
+    GAMMA = 0.99  # 0.9
+    TAU = 0.005  # 1e-2
+    NOISE = vars(args)['expl_noise']
 
     if not os.path.exists(model_directory):
         os.makedirs(model_directory)
@@ -336,16 +342,12 @@ if __name__ == '__main__':
     writer = SummaryWriter(writer_path)
 
     env = gym.make(exp_name)
-    env = FullyObsWrapper(env)
-    env = ImgObsWrapper(env)  # Get rid of the 'mission' field
-    env.set_max_steps(10000)
-    env.seed(SEED)  # set seed to 110
-    obs = env.reset()  # This now produces an RGB tensor only
 
-    obs_size = obs.size
-    n_actions = env.action_space.n
-
+    MAX_STEPS = env._max_episode_steps
     MAX_BUFFER = 1000000
+
+    obs_size = env.observation_space.shape[0]
+    n_actions = env.action_space.shape[0]
 
     print('Active CUDA Device: GPU', torch.cuda.current_device())
     print('Available devices ', torch.cuda.device_count())
@@ -357,7 +359,7 @@ if __name__ == '__main__':
 
     S_DIM = obs_size
     A_DIM = n_actions
-    A_MAX = 1
+    A_MAX = env.action_space.high
 
     print(' State Dimensions :- ', S_DIM)
     print(' Action Dimensions :- ', A_DIM)
@@ -371,7 +373,7 @@ if __name__ == '__main__':
 
     start_time = time.time()
     # define agent start state
-    agent_start_list = [((1, 1), 0)]
+    agent_start_list = [(0,0)]
 
     reward_mean_dict = OrderedDict()
     reward_std_dict = OrderedDict()
@@ -402,7 +404,7 @@ if __name__ == '__main__':
         test_reward_accum_dict[agent_start] = 0
         test_step_counts_min_dict[agent_start] = 0
 
-    min_reward = round(-env.steps_remaining * 0.1, 1)
+    min_reward = -1.00e5
     global_reward_max = min_reward
     test_global_reward_max = min_reward
 
@@ -417,7 +419,7 @@ if __name__ == '__main__':
         for state_num, agent_start in enumerate(agent_start_list):
             print('======================== Sampling test episodes: state {} ========================'.format(
                 (state_num, len(agent_start_list))))
-            batch = utils.iterate_model_batches_net_Rstep_DDPG(env, trainer, ram, 10, use_cuda, device, train=False)
+            batch = utils.iterate_model_batches_net_Rstep_bullet_DDPG(env, trainer, ram, 10, use_cuda, device, train=False)
 
             # get batch states and convert states, rewards to tensors
             test_obs_v, test_act_v, test_act_probs, test_rewards, test_discount_rewards, test_reward_mean_dict[
@@ -457,7 +459,7 @@ if __name__ == '__main__':
         for state_num, agent_start in enumerate(agent_start_list):
             print('======================== Sampling train episodes: state {} ========================'.format(
                 (state_num, len(agent_start_list))))
-            batch = utils.iterate_model_batches_net_Rstep_DDPG(env, trainer, ram, 1, use_cuda, device,
+            batch = utils.iterate_model_batches_net_Rstep_bullet_DDPG(env, trainer, ram, 1, use_cuda, device,
                                                                train=True)
 
             # get batch states and convert states, rewards to tensors

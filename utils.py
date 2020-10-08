@@ -132,6 +132,35 @@ def sample_episodes_eval_reacher(env, model, ensemble_size, max_steps, sparse_re
     return Episode(reward=episode_reward, steps=episode_steps)
 
 
+def sample_episodes_eval_bullet(env, model, ensemble_size, use_cuda, device):
+    episode_reward = 0.0
+    episode_steps = []
+    max_action = env.action_space.high
+
+    env.seed(SEED)
+    # env.action_space.seed(SEED)
+    env.observation_space.seed(SEED)
+
+    obs = env.reset()
+    # sm = nn.Softmax(dim=1)
+    while True:
+        obs_v = torch.FloatTensor([obs.flatten()])
+        obs_v = obs_v.to(device)
+
+        output = model.ensemble_forward(obs_v, ensemble_size)
+        output[torch.isnan(output)] = 0
+        ensemble_out = torch.mean(output, dim=0).reshape(1, -1)
+        act_probs_v = ensemble_out
+        action = act_probs_v.cpu().data.numpy().flatten()
+
+        next_obs, reward, is_done, _ = env.step(action.flatten() * max_action)
+        episode_reward += reward
+        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=action))
+        if is_done:
+            return Episode(reward=episode_reward, steps=episode_steps)
+        obs = next_obs
+
+
 def sample_episodes_netCEM2(env, model, use_cuda, device, seed=SEED):
     episode_reward = 0.0
     episode_steps = []
@@ -179,6 +208,33 @@ def sample_episodes_netCEM2_reacher(env, model, max_steps, sparse_reward, screen
         obs = next_obs
 
     return Episode(reward=episode_reward, steps=episode_steps)
+
+
+def sample_episodes_netCEM2_bullet(env, model, use_cuda, device, seed=SEED):
+    episode_reward = 0.0
+    episode_steps = []
+    max_action = env.action_space.high
+
+    env.seed(SEED)
+    # env.action_space.seed(SEED)
+    env.observation_space.seed(SEED)
+
+    obs = env.reset()
+    while True:
+        obs_v = torch.FloatTensor([obs.flatten()])
+        obs_v = obs_v.to(device)
+
+        model_out = model(obs_v)
+        model_out[torch.isnan(model_out)] = 0
+        act_probs_v = model_out
+        action = act_probs_v.cpu().data.numpy().flatten()
+
+        next_obs, reward, is_done, _ = env.step(action.flatten() * max_action)
+        episode_reward += reward
+        episode_steps.append(EpisodeStep(observation=obs, action=action, action_probs=action))
+        if is_done:
+            return Episode(reward=episode_reward, steps=episode_steps)
+        obs = next_obs
 
 
 def sample_episodes_net_Rstep(env, model, use_cuda, device, seed=SEED):
@@ -386,6 +442,78 @@ def sample_episodes_net_Rstep_DQN_reacher(env, model, memory, n_actions, steps_d
     return memory, steps_done, Episode(reward=episode_reward, steps=episode_steps)
 
 
+def sample_episodes_net_Rstep_bullet(env, model, n_actions, steps_done, eps_start, eps_end, eps_decay, use_cuda, device):
+    episode_reward = 0.0
+    episode_steps = []
+    max_action = env.action_space.high
+
+    env.seed(SEED)
+    # env.action_space.seed(SEED)
+    env.observation_space.seed(SEED)
+
+    obs = env.reset()
+    # sm = nn.Softmax(dim=1)
+
+    while True:
+        obs_v = torch.FloatTensor([obs.flatten()])
+        obs_v = obs_v.to(device)
+        model_out = model(obs_v)
+        act_probs_v = model_out
+
+        # select action
+        sample = random.random()
+        eps_threshold = eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay)
+        steps_done += 1
+        if sample > eps_threshold:
+            action = act_probs_v.cpu().data.numpy().flatten()
+        else:
+            action = act_probs_v.cpu().data.numpy().flatten()  # still uses the policy action
+
+        next_obs, reward, is_done, _ = env.step(action.flatten() * max_action)
+        episode_reward += reward
+        episode_steps.append(EpisodeStep_R(observation=obs, action=action, action_probs=action, reward=reward))
+        if is_done:
+            return Episode(reward=episode_reward, steps=episode_steps)
+        obs = next_obs
+
+
+def sample_episodes_net_Rstep_bullet_DDPG(env, model, memory, use_cuda, device, seed=SEED, train=True):
+    episode_reward = 0.0
+    episode_steps = []
+    max_action = env.action_space.high
+
+    env.seed(SEED)
+    # env.action_space.seed(SEED)
+    env.observation_space.seed(SEED)
+
+    obs = env.reset()
+    while True:
+        state = np.float32(obs.flatten())
+
+        # select action
+        if train == True:
+            action = model.get_exploration_action(state)
+        else:
+            action = model.get_exploitation_action(state)
+
+        next_obs, reward, is_done, info = env.step(action)
+        episode_reward += reward
+
+        if is_done:
+            new_state = None
+        else:
+            next_state = np.float32(next_obs)
+            # push this exp in ram
+            if train == True:
+                memory.add(state, action, reward, next_state)
+
+        episode_steps.append(
+            EpisodeStep_R(observation=state, action=action, action_probs=action, reward=reward))
+        if is_done:
+            return Episode(reward=episode_reward, steps=episode_steps)
+        obs = next_obs
+
+
 def iterate_model_batches_net_Rstep(env, model, batch_size, use_cuda=False, device=torch.device("cuda:0")):
     batch = []
     for episodes in range(batch_size):
@@ -393,10 +521,24 @@ def iterate_model_batches_net_Rstep(env, model, batch_size, use_cuda=False, devi
     return batch
 
 
+def iterate_model_batches_net_Rstep_bullet(env, model, batch_size, n_actions, steps_done, eps_start, eps_end, eps_decay, use_cuda=False, device=torch.device("cuda:0")):
+    batch = []
+    for episodes in range(batch_size):
+        batch.append(sample_episodes_net_Rstep_bullet(env, model, n_actions, steps_done, eps_start, eps_end, eps_decay, use_cuda, device))
+    return batch
+
+
 def iterate_model_batches_net_Rstep_DDPG(env, model, memory, batch_size, use_cuda=False, device=torch.device("cuda:0"), train=False):
     batch = []
     for episodes in range(batch_size):
         batch.append(sample_episodes_net_Rstep_DDPG(env, model, memory, use_cuda, device, train))
+    return batch
+
+
+def iterate_model_batches_net_Rstep_bullet_DDPG(env, model, memory, batch_size, use_cuda=False, device=torch.device("cuda:0"), train=False):
+    batch = []
+    for episodes in range(batch_size):
+        batch.append(sample_episodes_net_Rstep_bullet_DDPG(env, model, memory, use_cuda, device, train))
     return batch
 
 
@@ -448,6 +590,28 @@ def iterate_model_batchesWB_msCEM2_reacher(env, model, theta, agent_start_list, 
         ep_batch = []
         for episodes in range(batch_size):
             ep_batch.append(sample_episodes_netCEM2_reacher(env, model, max_steps, sparse_reward, screenshot, use_cuda, device))
+        batch.extend(ep_batch)
+    # also calculate the average reward of this model batch
+    rewards = list(map(lambda s: s.reward, batch))
+    reward_mean = float(np.mean(rewards))
+    step_counts = list(map(lambda s: len(s.steps), batch))
+    step_counts_mean = float(np.mean(step_counts))
+
+    return WeightEp(weight=theta, ave_reward=reward_mean, ave_steps=step_counts_mean, episodes=batch)
+
+
+def iterate_model_batchesWB_msCEM2_bullet(env, model, theta, agent_start_list, batch_size, use_cuda, device, seed=SEED):
+    batch = []
+    # set the current model's generated weights
+    theta_tensor = torch.FloatTensor(theta.flatten())
+    loadWeight_dict = getLoadWeightDict(model.state_dict(), theta_tensor)
+    model.load_state_dict(loadWeight_dict)
+
+    # sample episodes
+    for agent_start in agent_start_list:
+        ep_batch = []
+        for episodes in range(batch_size):
+            ep_batch.append(sample_episodes_netCEM2_bullet(env, model, use_cuda, device, seed))
         batch.extend(ep_batch)
     # also calculate the average reward of this model batch
     rewards = list(map(lambda s: s.reward, batch))

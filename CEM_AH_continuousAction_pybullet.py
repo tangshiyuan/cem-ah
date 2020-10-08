@@ -17,7 +17,7 @@ import torch.utils.data
 from torch.autograd import Variable
 from scipy.special import softmax
 
-from reacher import Reacher
+import pybulletgym
 
 import models
 import utils
@@ -33,6 +33,7 @@ def load_args():
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--layer', default=2, type=int)
     parser.add_argument('--hidden_s', default=100, type=int)
+    parser.add_argument('--exp_name', default='AntPyBulletEnv-v0', type=str)
     # parser.add_argument('--ep_batch', default=1, type=int)
     parser.add_argument('--percentile', default=90, type=int)
     parser.add_argument('--batch_size', default=100, type=int)
@@ -124,15 +125,16 @@ def create_dis_batch_loader(obs_v, act_probs_v, fake_obs_v, fake_act_pobs_v, use
     return dis_inputs, dis_targets, dis_dataloader
 
 
-def sample_train_msCEM_reacher(e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, net_batch, ep_batch, theta_mean,
+def sample_train_msCEM_bullet(e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, net_batch, ep_batch, theta_mean,
                        theta_std, use_cuda, device):
-    min_reward = 0
+    min_reward = -1.00e5
 
     thetas = np.vstack([np.random.multivariate_normal(theta_mean, np.diag(theta_std ** 2)) for _ in range(net_batch)])
     msCEM_net_batch = []
     for theta in thetas:
         # sample episodes, each state sample BATCH_SIZE episodes  # 1
-        batch = utils.iterate_model_batchesWB_msCEM2_reacher(env, msCEM_model, theta, agent_start_list, MAX_STEPS, ep_batch, SPARSE_REWARD, SCREEN_SHOT, use_cuda, device)
+        batch = utils.iterate_model_batchesWB_msCEM2_bullet(env, msCEM_model, theta, agent_start_list, ep_batch,
+                                                            use_cuda, device)
         msCEM_net_batch.append(batch)
     # filter elite episodes for each state
     elite_batch, top_batch, elite_weights, reward_b, reward_m, ave_reward_std, reward_max, reward_accum, step_counts_min, step_counts_m, unfit_count = utils.filter_elite_batchW_msCEM_accumR_std(
@@ -203,6 +205,7 @@ if __name__ == '__main__':
     HIDDEN_SIZE = vars(args)['hidden_s']
     NOISE_SIZE = vars(args)['ze']
     WEIGHT_LATENT_SIZE = vars(args)['z']
+    EXP_NAME = vars(args)['exp_name']
     # BATCH_SIZE = vars(args)['ep_batch']  # number of episodes in a batch
     NET_BATCH = vars(args)['batch_size']  # number of guiding CEM models/episodes (batch size)
     PERCENTILE = vars(args)['percentile']
@@ -212,17 +215,9 @@ if __name__ == '__main__':
     model_directory = 'model_CEM-AH'
     writer_directory = args.write_dir
 
-    exp_name = 'reacher'
+    exp_name = EXP_NAME
     COMMENT = args.comment
     SEED = 110
-
-    NUM_JOINTS = 2
-    LINK_LENGTH = [200, 140]
-    INI_JOING_ANGLES = [0.1, 0.1]
-    SCREEN_SIZE = 1000
-    SPARSE_REWARD = False
-    SCREEN_SHOT = False
-    action_range = 10.0
 
     # GAN settings
     gan_epochs = vars(args)['epochs']
@@ -248,12 +243,12 @@ if __name__ == '__main__':
 
     writer = SummaryWriter(writer_path)
 
-    env = Reacher(screen_size=SCREEN_SIZE, num_joints=NUM_JOINTS, link_lengths=LINK_LENGTH,
-                  ini_joint_angles=INI_JOING_ANGLES, target_pos=[369, 430], render=False, change_goal=False)
-    MAX_STEPS = 100
+    env = gym.make(exp_name)
 
-    obs_size = env.num_observations
-    n_actions = env.num_actions
+    MAX_STEPS = env._max_episode_steps
+
+    obs_size = env.observation_space.shape[0]
+    n_actions = env.action_space.shape[0]
 
     print('Active CUDA Device: GPU', torch.cuda.current_device())
     print('Available devices ', torch.cuda.device_count())
@@ -313,7 +308,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     # define agent start state
-    agent_start_list = [(tuple(INI_JOING_ANGLES), tuple([369, 430]))]
+    agent_start_list = [(0,0)]
 
     # initialise all the elite buffers and global_eList (storing top elite across iterations)
     e_batch_buffer_msCEM = utils.elite_batch_bufferW_msCEM(100)  # 100 * (100 episodes) * (10k max steps) = 1e8
@@ -365,7 +360,7 @@ if __name__ == '__main__':
         for state_num, agent_start in enumerate(agent_start_list):
             test_batch = []
             for episodes in range(eval_ep_per_state):
-                test_batch.append(utils.sample_episodes_eval_reacher(env, model, ensemble_size, MAX_STEPS, SPARSE_REWARD, SCREEN_SHOT, use_cuda, device))
+                test_batch.append(utils.sample_episodes_eval_bullet(env, model, ensemble_size, use_cuda, device))
 
             # get the test_batch stats
             test_reward_mean_dict[agent_start], test_reward_std_dict[agent_start], test_reward_max_dict[agent_start], test_reward_accum_dict[agent_start], test_step_counts_mean_dict[agent_start], test_step_counts_std_dict[agent_start], test_elite_ratio_dict[agent_start] = utils.get_batch_stats_eval(
@@ -394,7 +389,14 @@ if __name__ == '__main__':
         print('======================== Sampling and training msCEM (1 step) ========================')
         train_start_cem = time.time()
 
-        e_batch_buffer_msCEM, global_eList_msCEM, theta_mean, theta_std, reward_m_msCEM, ave_reward_std_msCEM, reward_max_msCEM, reward_accum_msCEM, elite_ratio_msCEM, e_reward_mean_msCEM, global_eReward_msCEM = sample_train_msCEM_reacher(
+        # if multivariate CEM distribution too narrow, reinitialize
+        theta_std_mean = np.mean(theta_std)
+        if theta_std_mean < 0.3:
+            # Initialize mean and standard deviation
+            theta_mean = np.zeros(dim_theta)
+            theta_std = np.ones(dim_theta)
+
+        e_batch_buffer_msCEM, global_eList_msCEM, theta_mean, theta_std, reward_m_msCEM, ave_reward_std_msCEM, reward_max_msCEM, reward_accum_msCEM, elite_ratio_msCEM, e_reward_mean_msCEM, global_eReward_msCEM = sample_train_msCEM_bullet(
             e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, NET_BATCH, 1, theta_mean, theta_std, use_cuda,
             device)
 

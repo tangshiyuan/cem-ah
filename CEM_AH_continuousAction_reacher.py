@@ -4,6 +4,7 @@ import numpy as np
 import argparse
 import time
 import pickle
+import math
 
 from tensorboardX import SummaryWriter
 from datetime import datetime
@@ -16,9 +17,7 @@ import torch.utils.data
 from torch.autograd import Variable
 from scipy.special import softmax
 
-import gym_minigrid
-from gym import wrappers
-from gym_minigrid.wrappers import *
+from reacher import Reacher
 
 import models
 import utils
@@ -27,7 +26,6 @@ sm = nn.Softmax(dim=1)
 
 def load_args():
     parser = argparse.ArgumentParser(description='param')
-    # parser.add_argument('--exp', default='maze', type=str, help='experiment')
     parser.add_argument('--z', default=200, type=int, help='latent space width')
     parser.add_argument('--ze', default=100, type=int, help='encoder dimension')
     parser.add_argument('--epochs', default=500, type=int)
@@ -126,16 +124,15 @@ def create_dis_batch_loader(obs_v, act_probs_v, fake_obs_v, fake_act_pobs_v, use
     return dis_inputs, dis_targets, dis_dataloader
 
 
-def sample_train_msCEM(e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, net_batch, ep_batch, theta_mean,
-                       theta_std, use_cuda, device, seed):
-    min_reward = round(-env.steps_remaining * 0.1, 1)
+def sample_train_msCEM_reacher(e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, net_batch, ep_batch, theta_mean,
+                       theta_std, use_cuda, device):
+    min_reward = 0
 
     thetas = np.vstack([np.random.multivariate_normal(theta_mean, np.diag(theta_std ** 2)) for _ in range(net_batch)])
     msCEM_net_batch = []
     for theta in thetas:
         # sample episodes, each state sample BATCH_SIZE episodes  # 1
-        batch = utils.iterate_model_batchesWB_msCEM2(env, msCEM_model, theta, agent_start_list, ep_batch, use_cuda,
-                                                     device, seed=seed)
+        batch = utils.iterate_model_batchesWB_msCEM2_reacher(env, msCEM_model, theta, agent_start_list, MAX_STEPS, ep_batch, SPARSE_REWARD, SCREEN_SHOT, use_cuda, device)
         msCEM_net_batch.append(batch)
     # filter elite episodes for each state
     elite_batch, top_batch, elite_weights, reward_b, reward_m, ave_reward_std, reward_max, reward_accum, step_counts_min, step_counts_m, unfit_count = utils.filter_elite_batchW_msCEM_accumR_std(
@@ -171,7 +168,7 @@ def sample_train_msCEM(e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_mode
         eB_reward_mean, eB_step_counts_mean = utils.get_batch_statsW(batch_buffer)
     # adj_ratio = 0.9 * ratio
     adj_ratio = 1
-    # add elite_batch to elite buffer only if new elite batch's reward mean >= current overall elite buffer's reward mean
+    # add elite_batch to elite buffer only if new elite batch's reward mean >= current overall elite buffer
     if (e_reward_mean >= eB_reward_mean * adj_ratio):
         e_batch_buffer_msCEM.update_buffer(elite_batch)
 
@@ -215,9 +212,17 @@ if __name__ == '__main__':
     model_directory = 'model_CEM-AH'
     writer_directory = args.write_dir
 
-    exp_name = 'MiniGrid-SimpleCrossingModS9N3-v0'
+    exp_name = 'reacher'
     COMMENT = args.comment
     SEED = 110
+
+    NUM_JOINTS = 2
+    LINK_LENGTH = [200, 140]
+    INI_JOING_ANGLES = [0.1, 0.1]
+    SCREEN_SIZE = 1000
+    SPARSE_REWARD = False
+    SCREEN_SHOT = False
+    action_range = 10.0
 
     # GAN settings
     gan_epochs = vars(args)['epochs']
@@ -243,15 +248,12 @@ if __name__ == '__main__':
 
     writer = SummaryWriter(writer_path)
 
-    env = gym.make(exp_name)
-    env = FullyObsWrapper(env)
-    env = ImgObsWrapper(env)  # Get rid of the 'mission' field
-    env.set_max_steps(10000)
-    env.seed(SEED)  # set seed to 110
-    obs = env.reset()
+    env = Reacher(screen_size=SCREEN_SIZE, num_joints=NUM_JOINTS, link_lengths=LINK_LENGTH,
+                  ini_joint_angles=INI_JOING_ANGLES, target_pos=[369, 430], render=False, change_goal=False)
+    MAX_STEPS = 100
 
-    obs_size = obs.size
-    n_actions = env.action_space.n
+    obs_size = env.num_observations
+    n_actions = env.num_actions
 
     print('Active CUDA Device: GPU', torch.cuda.current_device())
     print('Available devices ', torch.cuda.device_count())
@@ -263,13 +265,13 @@ if __name__ == '__main__':
 
     # main policy network, includes encoder, W1 and W2 class
     if LAYER == 2:   # 2-layer network
-        model = models.CEM_AH_2Layer(args, obs_size, n_actions)
+        model = models.CEM_AH_2Layer_continuous(args, obs_size, n_actions)
         model = model.to(device)
         l1, b1 = model.get_gen_weights()
         weight_size = np.sum(list(l1.flatten().shape) + list(b1.flatten().shape))
 
     if LAYER == 3:  # 3-layer network
-        model = models.CEM_AH_3Layer(args, obs_size, n_actions)
+        model = models.CEM_AH_3Layer_continuous(args, obs_size, n_actions)
         model = model.to(device)
         l1, b1, l2, b2 = model.get_gen_weights()
         weight_size = np.sum(
@@ -311,7 +313,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     # define agent start state
-    agent_start_list = [((1, 1), 0)]
+    agent_start_list = [(tuple(INI_JOING_ANGLES), tuple([369, 430]))]
 
     # initialise all the elite buffers and global_eList (storing top elite across iterations)
     e_batch_buffer_msCEM = utils.elite_batch_bufferW_msCEM(100)  # 100 * (100 episodes) * (10k max steps) = 1e8
@@ -358,15 +360,12 @@ if __name__ == '__main__':
         # testing/eval with ensemble
         test_start = time.time()
         eval_ep_per_state = 10  # 10 episodes
+        ensemble_size = 10
 
         for state_num, agent_start in enumerate(agent_start_list):
-            start_pos = agent_start[0]  # col, row
-            start_dir = agent_start[1]
-            env.set_initial_pos_dir(start_pos, start_dir)
-
             test_batch = []
             for episodes in range(eval_ep_per_state):
-                test_batch.append(utils.sample_episodesNorm_eval(env, model, ensemble_size=10, use_cuda=use_cuda, device=device, seed=SEED))  # testing with ensemble size 10
+                test_batch.append(utils.sample_episodes_eval_reacher(env, model, ensemble_size, MAX_STEPS, SPARSE_REWARD, SCREEN_SHOT, use_cuda, device))
 
             # get the test_batch stats
             test_reward_mean_dict[agent_start], test_reward_std_dict[agent_start], test_reward_max_dict[agent_start], test_reward_accum_dict[agent_start], test_step_counts_mean_dict[agent_start], test_step_counts_std_dict[agent_start], test_elite_ratio_dict[agent_start] = utils.get_batch_stats_eval(
@@ -402,8 +401,9 @@ if __name__ == '__main__':
             theta_mean = np.zeros(dim_theta)
             theta_std = np.ones(dim_theta)
 
-        e_batch_buffer_msCEM, global_eList_msCEM, theta_mean, theta_std, reward_m_msCEM, ave_reward_std_msCEM, reward_max_msCEM, reward_accum_msCEM, elite_ratio_msCEM, e_reward_mean_msCEM, global_eReward_msCEM = sample_train_msCEM(
-            e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, NET_BATCH, 1, theta_mean, theta_std, use_cuda, device, seed=SEED)
+        e_batch_buffer_msCEM, global_eList_msCEM, theta_mean, theta_std, reward_m_msCEM, ave_reward_std_msCEM, reward_max_msCEM, reward_accum_msCEM, elite_ratio_msCEM, e_reward_mean_msCEM, global_eReward_msCEM = sample_train_msCEM_reacher(
+            e_batch_buffer_msCEM, global_eList_msCEM, env, msCEM_model, NET_BATCH, 1, theta_mean, theta_std, use_cuda,
+            device)
 
         train_duration_cem = time.time() - train_start_cem
 
@@ -419,15 +419,17 @@ if __name__ == '__main__':
         CEM_batch = e_batch_buffer_msCEM.get_single_batch()
         CEM_obs_v, CEM_act_v, CEM_act_probs = utils.convert_weightbatch_obs_act(CEM_batch)
         all_CEM_obs_v_buffer = CEM_obs_v.reshape(CEM_obs_v.shape[0], -1)
-        # standardize observations
-        all_obs_v_buffer = (all_CEM_obs_v_buffer - all_CEM_obs_v_buffer.mean(dim=1, keepdim=True)) / all_CEM_obs_v_buffer.std(dim=1, keepdim=True)
+        # # standardize observations
+        # all_obs_v_buffer = (all_CEM_obs_v_buffer - all_CEM_obs_v_buffer.mean(dim=1, keepdim=True)) / all_CEM_obs_v_buffer.std(dim=1, keepdim=True)
+        all_obs_v_buffer = all_CEM_obs_v_buffer
         all_act_probs_v_buffer = CEM_act_probs
 
         CEM_obs_v_top, CEM_act_v_top, CEM_act_probs_top = utils.convert_weightbatch_obs_act(global_eList_msCEM)
         obs_v_top = CEM_obs_v_top.reshape(CEM_obs_v_top.shape[0], -1)
 
-        # standardize observations
-        all_obs_v_top = (obs_v_top - obs_v_top.mean(dim=1, keepdim=True)) / obs_v_top.std(dim=1, keepdim=True)
+        # # standardize observations
+        # all_obs_v_top = (obs_v_top - obs_v_top.mean(dim=1, keepdim=True)) / obs_v_top.std(dim=1, keepdim=True)
+        all_obs_v_top = obs_v_top
         all_act_probs_v_top = CEM_act_probs_top
 
         all_obs_v_buffer = torch.cat((all_obs_v_buffer, all_obs_v_top), 0)
