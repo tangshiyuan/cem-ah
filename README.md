@@ -11,7 +11,13 @@ python CEM_AH_discreteAction.py --lr 1e-4 --layer 2 --batch_size 100
 
 Run the following for reacher experiment.
 ```Train and Evaluation (reacher)
-python CEM_AH_continuousAction.py --lr 1e-4 --layer 2 --batch_size 100
+python CEM_AH_continuousAction_reacher.py --lr 1e-4 --layer 2 --batch_size 100
+```
+
+Run the following for pybullet-gym experiments (ant, walker).
+```Train and Evaluation (ant, walker)
+python CEM_AH_continuousAction_pybullet.py --lr 1e-4 --layer 2 --batch_size 100 --exp_name 'AntPyBulletEnv-v0'
+python CEM_AH_continuousAction_pybullet.py --lr 1e-4 --layer 2 --batch_size 100 --exp_name 'Walker2DPyBulletEnv-v0'
 ```
 
 > The experiments are done with the following hyper-parameters. Learning rate (--lr) {0.001, 0.005,0.0001\}, batch size (--batch_size) {50, 100, 1000\}, and number of neural network layers (--layer) {2, 3\}. 
